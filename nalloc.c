@@ -125,9 +125,7 @@ static
 block *(alloc_from_slab)(slab *s, heritage *h){
     if(s->contig_blocks)
         return (block *) &blocks_of(s)[h->t->size * --s->contig_blocks];
-    block *b = cof(stack_pop(&s->free_blocks), block, sanc);
-    assert(b);
-    return b;
+    return mustp(cof(stack_pop(&s->free_blocks), block, sanc));
 }
 
 static
@@ -139,7 +137,7 @@ static
 err (recover_hot_blocks)(slab *s){
     assert(!lfstack_gen(&s->hot_blocks));
     stack p = lfstack_pop_all_or_incr(1, &s->hot_blocks);
-    if(!stack_size(&p))
+    if(stack_empty(&p))
         return -1;
     s->free_blocks = p;
     return 0;
@@ -207,7 +205,7 @@ void (linfree)(lineage *l){
         if(lfstack_gen(&hb) == 1 && !lfstack_empty(&hb)){
             assert(stack_empty(&s->free_blocks));
             /* TODO: a bit invasive. And size is now out of sync */
-            s->free_blocks = (stack){.top=hb.top, .size=0};
+            s->free_blocks = lfstack_convert(&hb);
             lfstack_push(&s->sanc, &s->her->slabs);
         }
     }
