@@ -146,9 +146,6 @@ void byte_account_close(byte_account *a);
 /* #define pudef (heritage, "(her){%, nslabs:%}", a->t, a->slabs.size) */
 /* #include <pudef.h> */
 
-#undef LOG_NALLOC
-#define LOG_NALLOC 0
-
 #define smalloc(as...) trace(NALLOC, 1, smalloc, as)
 #define sfree(as...) trace(NALLOC, 1, sfree, as)
 #define malloc(as...) trace(NALLOC, 1, malloc, as)
@@ -159,4 +156,6 @@ void byte_account_close(byte_account *a);
 #define linalloc(as...) trace(NALLOC, 1, linalloc, as)
 #define linfree(as...) trace(NALLOC, 1, linfree, as)
         
-        
+#ifndef LOG_NALLOC
+#define LOG_NALLOC 0
+#endif
