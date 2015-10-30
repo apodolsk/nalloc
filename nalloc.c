@@ -49,6 +49,7 @@
 #define LINREF_ACCOUNT_DBG 1
 #define NALLOC_MAGIC_INT 0x01FA110C
 #define LINREF_VERB 2
+#ifndef NONALLOC
 
 static slab *slab_new(heritage *h);
 static block *alloc_from_slab(slab *s, heritage *h);
@@ -308,6 +309,40 @@ void fake_linref_down(void){
     T->nallocin.linrefs_held--;
 }
 
+void *memalign(size align, size sz){
+    EWTF();
+    assert(sz <= MAX_BLOCK
+           && align < PAGE_SIZE
+           && align * (sz / align) == align);
+    if(!is_pow2(align) || align < sizeof(void *))
+        return NULL;
+    return malloc(sz);
+}
+
+int posix_memalign(void **mptr, size align, size sz){
+    return (*mptr = memalign(align, sz)) ? 0 : -1;
+}
+
+void *pvalloc(size sz){
+    EWTF();
+}
+
+void *aligned_alloc(size align, size sz){
+    return memalign(align, sz);
+}
+
+void *valloc(size sz){
+    EWTF();
+}
+
+/* TODO: keep track of size */
+void nalloc_profile_report(void){
+    /* ppl(0, slabs_allocated, slabs_used, bytes_used, lfstack_size(&shared_free_slabs)); */
+    ppl(0, slabs_allocated, slabs_used, bytes_used);
+}
+
+#endif  /* NONALLOC */
+
 void linref_account_open(linref_account *a){
     assert(a->baseline = T->nallocin.linrefs_held, 1);
 }
@@ -323,34 +358,6 @@ void byte_account_open(byte_account *a){
 
 void byte_account_close(byte_account *a){
     assert(a->baseline == bytes_used);
-}
-
-void *memalign(size align, size sz){
-    EWTF();
-    assert(sz <= MAX_BLOCK
-           && align < PAGE_SIZE
-           && align * (sz / align) == align);
-    if(!is_pow2(align) || align < sizeof(void *))
-        return NULL;
-    return malloc(sz);
-}
-int posix_memalign(void **mptr, size align, size sz){
-    return (*mptr = memalign(align, sz)) ? 0 : -1;
-}
-void *pvalloc(size sz){
-    EWTF();
-}
-void *aligned_alloc(size align, size sz){
-    return memalign(align, sz);
-}
-void *valloc(size sz){
-    EWTF();
-}
-
-/* TODO: keep track of size */
-void nalloc_profile_report(void){
-    /* ppl(0, slabs_allocated, slabs_used, bytes_used, lfstack_size(&shared_free_slabs)); */
-    ppl(0, slabs_allocated, slabs_used, bytes_used);
 }
 
 #pragma GCC visibility pop
