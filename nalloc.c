@@ -300,15 +300,6 @@ int magics_valid(block *b, size bytes){
     return 1;
 }
 
-err fake_linref_up(void){
-    T->nallocin.linrefs_held++;
-    return 0;
-}
-
-void fake_linref_down(void){
-    T->nallocin.linrefs_held--;
-}
-
 void *memalign(size align, size sz){
     EWTF();
     assert(sz <= MAX_BLOCK
@@ -342,6 +333,15 @@ void nalloc_profile_report(void){
 }
 
 #endif  /* NONALLOC */
+
+err fake_linref_up(void){
+    T->nallocin.linrefs_held++;
+    return 0;
+}
+
+void fake_linref_down(void){
+    T->nallocin.linrefs_held--;
+}
 
 void linref_account_open(linref_account *a){
     assert(a->baseline = T->nallocin.linrefs_held, 1);
