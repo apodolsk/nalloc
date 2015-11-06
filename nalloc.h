@@ -112,8 +112,8 @@ void fake_linref_down(void);
 
 typedef struct{
     int linrefs_held;
-} nalloc_info;
-#define NALLOC_INFO {}
+} nalloc_tls;
+#define NALLOC_TLS {}
 
 #define linref_account(balance, e...)({                 \
         linref_account laccount = (linref_account){};   \
