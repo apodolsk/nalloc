@@ -5,7 +5,7 @@
 
 typedef struct {
     sanchor sanc;
-} block;
+} aliasing block;
 typedef block lineage;
 
 typedef const struct type{
