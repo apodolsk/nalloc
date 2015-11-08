@@ -2,34 +2,7 @@
  * Lockfree slab allocator for type-stable memory and customizably local
  * caching of free memory, as well as plain malloc.
  *
- * Allocates lineages from slabs. A slab is a naturally aligned, contig
- * set of lineages of the same size, of the same type (id). A heritage is
- * a set of slabs of lineages of the same type. A lineage is a block of
- * memory except its contents are defined even after it's freed. It
- * represents all the generations of the same address that have kept the
- * same type.
- *
- * The standard functions like malloc() use global heritages of
- * "polymorphic types" ("bullshit") of fixed sizes and no-op lin_init
- * functions.
- *
- * nalloc stores slab metadata away from slabs, in a huge BSS array. This
- * is the easiest way to make linref_up safe. Otherwise, you'd have to
- * forbid linref_up calls on pages not controlled by nalloc (think
- * memory-mapped files). That's not too onerous, but only if nalloc can't
- * return pages to the kernel. It also makes bigger-than-slab-size
- * allocations easy, and plays better with low-associativity caches by not
- * reserving the head or foot of each page for metadata.
- *
- * On the other hand, Linux programs like gdb can't handle a huge BSS, so
- * I restrict the dimensions of the heap. The array scheme is probably too
- * tough for Linux, but it wouldn't be very hard to switch back to
- * metadata in slab headers.
- *
- * TODO: slabs are actually never freed right now.
- *
- * TODO: local heritages need special cased code to avoid needless LOCKed
- * instructions. 
+ * TODO: slabs are never freed right now. 
  *
  * TODO: need some heritage_destroy function, otherwise you have to leak
  * the slabs in local heritages upon thread death.
