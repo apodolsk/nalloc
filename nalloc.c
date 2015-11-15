@@ -1,11 +1,12 @@
 /**
- * Lockfree slab allocator for type-stable memory and customizably local
- * caching of free memory, as well as plain malloc.
+ * TODO: slabs are permanently allocated to their host heritage, in this
+ * latest version. This'll cause largetest to OOM as more and more slabs
+ * become tied to the stack heritage. There are simple fixes, but one that
+ * bounds garbage and keeps linalloc O(1) will take a little thought.
  *
- * TODO: slabs are never freed right now. 
- *
- * TODO: need some heritage_destroy function, otherwise you have to leak
- * the slabs in local heritages upon thread death.
+ * TODO: need some heritage_destroy function, otherwise you likely leak
+ * the slabs in local heritages when the thing to which they're local
+ * dies.
  */
 
 #define MODULE NALLOC
@@ -178,7 +179,6 @@ void (linfree)(lineage *l){
         lfstack hb = lfstack_pop_all_iff(0, &s->hot_blocks, 1);
         if(lfstack_gen(&hb) == 1 && !lfstack_empty(&hb)){
             assert(stack_empty(&s->free_blocks));
-            /* TODO: a bit invasive. And size is now out of sync */
             s->free_blocks = lfstack_convert(&hb);
             lfstack_push(&s->sanc, &s->her->slabs);
         }
