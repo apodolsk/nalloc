@@ -52,12 +52,6 @@ typedef struct align(SLAB_SIZE) slab{
 } slab;
 
 #define SLAB {.free_blocks = STACK, .hot_blocks = LFSTACK}
-/* TODO */
-/* #define pudef (slab, "(slab){%, refs:%, contig:%, free:%, hot:%}",   \ */
-/*                a->tx.t, a->tx.linrefs, a->contig_blocks,                \ */
-/*                stack_size(&a->free_blocks),                             \ */
-/*                lfstack_size(&a->hot_blocks)) */
-/* #include <pudef.h> */
 
 extern lfstack shared_free_slabs;
 
@@ -66,22 +60,22 @@ dbg extern cnt bytes_used;
 
 typedef void (*linit)(void *);
 
-/* If ret != 0 and no subsequent linfree(l) has been called, then
-   !linref_up(l, h->t) and linalloc(h') != ret for all h'. */
+/* If ret and linfree(l) hasn't subsequently been called:
+   - linalloc(h') != ret for all h', and
+   - h->t->lin_init returned. Afterwards, no nalloc function has written
+     to the t->size - sizeof(lineage) bytes following l.
+   - !linref_up(l).
+*/
 checked void *linalloc(heritage *h);
 void linfree(lineage *l);
 
-/* If !ret and no subseqent linref_down(l) has been called, then for the
-   maximal set H of heritages s.t h->t == t for h in H:
-   - linalloc(h') != l for h' not in H.
-   - linref_up(l, t') != 0 for all t' != t.
+/* If !ret and linref_down(l) hasn't subsequently been called, then:
+   - linref_up(l, t') != 0 iff t' != t, and
+   - linalloc(h) == l previously.
+   - Also, if linalloc(h) == l, h->t == t.
 
-   Also, t->lin_init(l) was called and no nalloc function has written to
-   the t->size - sizeof(lineage) bytes following l. (Even if linfree(l)
-   was called)
-
-   If you use this right, you can figure that l has the type you associate
-   with t.
+   This implies that, l was last initialized according to t, and before
+   the call, and even if it was freed and/or reallocated, nalloc didn't
 */
 checked err linref_up(volatile void *l, type *t);
 void linref_down(volatile void *l);
