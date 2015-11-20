@@ -60,22 +60,21 @@ dbg extern cnt bytes_used;
 
 typedef void (*linit)(void *);
 
-/* If ret and linfree(l) hasn't subsequently been called:
+/* If ret and linfree(l) wasn't subsequently called:
    - linalloc(h') != ret for all h', and
-   - h->t->lin_init returned. Afterwards, no nalloc function has written
-     to the t->size - sizeof(lineage) bytes following l.
+   - h->t->lin_init returned and no nalloc function subsequently wrote to
+     the t->size - sizeof(lineage) bytes following l.
    - !linref_up(l).
 */
 checked void *linalloc(heritage *h);
 void linfree(lineage *l);
 
-/* If !ret and linref_down(l) hasn't subsequently been called, then:
+/* If !ret and linref_down(l) wasn't subsequently called, then:
    - linref_up(l, t') != 0 iff t' != t, and
-   - linalloc(h) == l previously.
-   - Also, if linalloc(h) == l, h->t == t.
-
-   This implies that, l was last initialized according to t, and before
-   the call, and even if it was freed and/or reallocated, nalloc didn't
+   - If linalloc(h) == l, h->t == t, and
+   - h->t->lin_init returned previous to the call and no nalloc function
+     subsequently wrote to the t->size - sizeof(lineage) bytes following
+     l.
 */
 checked err linref_up(volatile void *l, type *t);
 void linref_down(volatile void *l);
