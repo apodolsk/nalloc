@@ -20,13 +20,6 @@
 #define LINREF_VERB 2
 #ifndef NONALLOC
 
-typedef struct align(SLAB_SIZE) slab{
-    u8 blocks[MAX_BLOCK];
-    slabfooter;
-} slab;
-
-#define SLAB {.free_blocks = STACK, .hot_blocks = LFSTACK}
-
 static slab *slab_new(heritage *h);
 static void slab_ref_down(slab *s);
 static cnt slab_max_blocks(const slab *s);
@@ -64,7 +57,7 @@ static const type polytypes[] = { MAP(PTYPE, _,
 
 #define PHERITAGE(i, ...)                                           \
     HERITAGE(&polytypes[i], 32, 1, new_slabs)
-static __thread heritage poly_heritages[] = {
+static heritage poly_heritages[] = {
     ITERATE(PHERITAGE, _, 14)
 };
 
@@ -138,8 +131,8 @@ void (linfree)(lineage *l){
         assert(!stack_peek(&s->free_blocks));
 
         struct heritage *her = s->her;
-        if(condxadd(1, &her->nslabs, her->max_slabs) >= her->max_slabs){
-            if(!st.lost){
+        if(xadd_iff(1, &her->nslabs, her->max_slabs) >= her->max_slabs){
+            if(fills_slab(st.size + 1, s->tx.t->size)){
                 s->contig_blocks = st.size + 1;
                 s->hot_blocks = (lfstack) LFSTACK;
                 slab_ref_down(s);
@@ -199,9 +192,9 @@ slab *(slab_new)(heritage *h){
         assert(xadd(h->slab_alloc_batch, &slabs_allocated), 1);
         assert(aligned_pow2(s, SLAB_SIZE));
         
-        s->slabfooter = (slabfooter) SLAB;
+        s->slabfooter = (slabfooter) SLABFOOTER;
         for(slab *si = s + 1; si != &s[h->slab_alloc_batch]; si++){
-            si->slabfooter = (slabfooter) SLAB;
+            si->slabfooter = (slabfooter) SLABFOOTER;
             lfstack_push(&si->sanc, h->free_slabs);
         }
     }

@@ -45,8 +45,14 @@ typedef volatile struct slabfooter{
     align(CACHELINE_SIZE)
     lfstack hot_blocks;
 } slabfooter;
-
+#define SLABFOOTER {.free_blocks = STACK, .hot_blocks = LFSTACK}
 #define MAX_BLOCK (SLAB_SIZE - sizeof(slabfooter))
+
+typedef struct align(SLAB_SIZE) slab{
+    u8 blocks[MAX_BLOCK];
+    slabfooter;
+} slab;
+
 #define MIN_ALIGN (sizeof(lineage))
 
 extern lfstack shared_free_slabs;
