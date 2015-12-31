@@ -11,11 +11,10 @@ typedef block lineage;
 typedef const struct type{
     const char *const name;
     const size size;
-    checked err (*linref_up)(volatile void *l, const struct type *t);
-    void (*linref_down)(volatile void *l);
     void (*lin_init)(lineage *b);
+    bool (*has_special_ref)(volatile void *l);
 } type;
-#define TYPE(t, lu, ld, li) {#t, sizeof(t), lu, ld, li}
+#define TYPE(t, li, hsr) {#t, sizeof(t), li, hsr}
 
 typedef struct heritage{
     lfstack slabs;
@@ -79,7 +78,7 @@ void linfree(lineage *l);
      l.
 */
 checked err linref_up(volatile void *l, type *t);
-void linref_down(volatile void *l);
+void linref_down(volatile void *l, type *t);
 
 checked void *smalloc(size size);
 void sfree(void *b, size size);

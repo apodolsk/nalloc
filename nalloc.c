@@ -49,7 +49,7 @@ dbg iptr slabs_used;
 dbg cnt bytes_used;
 dbg cnt max_bytes_used;
 
-#define PTYPE(s, ...) {#s, s, NULL, NULL, NULL}
+#define PTYPE(s, ...) {#s, s, NULL, NULL}
 static const type polytypes[] = { MAP(PTYPE, _,
         16, 32, 48, 64, 80, 96, 112, 128,
         192, 256, 384, 512, 1024, MAX_BLOCK)
@@ -235,6 +235,8 @@ err (linref_up)(volatile void *l, type *t){
     assert(l);
     if(l < heap_start() || l > heap_end())
         return EARG();
+    if(t->has_special_ref(l))
+        return T->nallocin.linrefs_held++, 0;
     
     slab *s = slab_of((void *) l);
     for(tyx tx = s->tx;;){
@@ -247,10 +249,10 @@ err (linref_up)(volatile void *l, type *t){
     }
 }
 
-void (linref_down)(volatile void *l){
+void (linref_down)(volatile void *l, type *t){
     T->nallocin.linrefs_held--;
-    slab *s = slab_of((void *) l);
-    slab_ref_down(s);
+    if(!t->has_special_ref(l))
+        slab_ref_down(slab_of((void *) l));
 }
 
 static
