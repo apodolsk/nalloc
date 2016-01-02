@@ -12,7 +12,7 @@ typedef const struct type{
     const char *const name;
     const size size;
     void (*lin_init)(lineage *b);
-    bool (*has_special_ref)(volatile void *l);
+    bool (*has_special_ref)(volatile void *l, bool up);
 } type;
 #define TYPE(t, li, hsr) {#t, sizeof(t), li, hsr}
 
