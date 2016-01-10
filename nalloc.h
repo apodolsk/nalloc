@@ -61,7 +61,7 @@ dbg extern cnt bytes_used;
 
 typedef void (*linit)(void *);
 
-/* If ret and linfree(l) wasn't subsequently called:
+/* If ret and linfree(l) didn't subsequently complete:
    - linalloc(h') != ret for all h', and
    - h->t->lin_init returned and no nalloc function subsequently wrote to
      the t->size - sizeof(lineage) bytes following l.
@@ -70,12 +70,13 @@ typedef void (*linit)(void *);
 checked void *linalloc(heritage *h);
 void linfree(lineage *l);
 
-/* If !ret and linref_down(l) wasn't subsequently called, then:
-   - linref_up(l, t') != 0 iff t' != t, and
+/* TODO: mention heap_start/heap_end. */
+/* TODO: mention has_special_ref() */
+/* If !ret and linref_down(l) didn't subsequently complete, then:
+   - linref_up(l, t') == 0 iff t' == t, and
    - If linalloc(h) == l, h->t == t, and
-   - h->t->lin_init returned previous to the call and no nalloc function
-     subsequently wrote to the t->size - sizeof(lineage) bytes following
-     l.
+   - h->t->lin_init returned and no nalloc function subsequently wrote to
+     the t->size - sizeof(lineage) bytes following l.
 */
 checked err linref_up(volatile void *l, type *t);
 void linref_down(volatile void *l, type *t);
@@ -95,12 +96,12 @@ typedef struct{
 void linref_account_open(linref_account *a);
 
 /* Asserts that, since the last linref_account_open(a), every
-   linref_up(...) or fake_linref_up(...) by the calling thread T was
-   followed by a [fake_]linref_down(...) by T. */
+   linref_up(...) or fake_linref_up(...) in T was followed by a
+   [fake_]linref_down(...) by T. */
 void linref_account_close(linref_account *a);
 
 /* Good for balancing linref accounts when ref ownership moves between
-   threads. */
+   threads, or when has_special_ref() does something wonky. */
 err fake_linref_up(void);
 void fake_linref_down(void);
 
