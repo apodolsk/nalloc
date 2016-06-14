@@ -113,7 +113,7 @@ typedef struct{
 #define linref_account(balance, e...)({                 \
         linref_account laccount = (linref_account){};   \
         linref_account_open(&laccount);                 \
-        typeof(e) account_expr = e;                     \
+        __auto_type account_expr = e;                   \
         laccount.baseline += balance;                   \
         linref_account_close(&laccount);                \
         account_expr;                                   \
@@ -128,7 +128,7 @@ void byte_account_close(byte_account *a);
 #define byte_account(balance, e...)({                   \
         byte_account baccount = (byte_account){};       \
         byte_account_open(&baccount);                   \
-        typeof(e) account_expr = e;                     \
+        __auto_type account_expr = e;                   \
         baccount.baseline += balance;                   \
         byte_account_close(&baccount);                  \
         account_expr;                                   \
