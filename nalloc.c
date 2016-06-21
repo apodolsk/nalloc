@@ -231,7 +231,7 @@ void (slab_ref_down)(slab *s){
     }
 }
 
-err (linref_up)(volatile void *l, type *t){
+err (linref_up)(const volatile void *l, type *t){
     assert(l);
     if(t->has_special_ref(l, true))
         return T->nallocin.linrefs_held++, 0;
@@ -249,7 +249,7 @@ err (linref_up)(volatile void *l, type *t){
     }
 }
 
-void (linref_down)(volatile void *l, type *t){
+void (linref_down)(const volatile void *l, type *t){
     T->nallocin.linrefs_held--;
     if(!t->has_special_ref(l, false))
         slab_ref_down(slab_of((void *) l));

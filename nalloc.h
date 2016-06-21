@@ -12,7 +12,7 @@ typedef const struct type{
     const char *const name;
     const size size;
     void (*lin_init)(lineage *b);
-    bool (*has_special_ref)(volatile void *l, bool up);
+    bool (*has_special_ref)(const volatile void *l, bool up);
 } type;
 #define TYPE(t, li, hsr) {#t, sizeof(t), li, hsr}
 
@@ -78,8 +78,8 @@ void linfree(lineage *l);
    - h->t->lin_init returned and no nalloc function subsequently wrote to
      the t->size - sizeof(lineage) bytes following l.
 */
-checked err linref_up(volatile void *l, type *t);
-void linref_down(volatile void *l, type *t);
+checked err linref_up(const volatile void *l, type *t);
+void linref_down(const volatile void *l, type *t);
 
 checked void *smalloc(size size);
 void sfree(void *b, size size);
