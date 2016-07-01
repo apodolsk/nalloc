@@ -49,7 +49,10 @@ typedef volatile struct slabfooter{
 
 typedef struct align(SLAB_SIZE) slab{
     u8 blocks[MAX_BLOCK];
-    slabfooter;
+    union{
+        struct slabfooter;
+        slabfooter slabfooter;
+    };
 } slab;
 
 #define MIN_ALIGN (sizeof(lineage))
