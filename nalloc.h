@@ -135,11 +135,10 @@ void byte_account_close(byte_account *a);
     })                                                  \
 
 
-#define pudef (type, "(typ){%}", a->name)
+#define pudef (struct type, "(typ){%}", a->name)
 #include <pudef.h>
-/* TODO */
-/* #define pudef (heritage, "(her){%, nslabs:%}", a->t, a->slabs.size) */
-/* #include <pudef.h> */
+#define pudef (heritage, "(her){%}", a->t)
+#include <pudef.h>
 
 #define smalloc(as...) trace(NALLOC, 1, smalloc, as)
 #define sfree(as...) trace(NALLOC, 1, sfree, as)
