@@ -15,7 +15,7 @@
    debugging. */
 #pragma GCC visibility push(hidden)
 
-#define LINREF_ACCOUNT_DBG 1
+#define LINREF_ACCOUNT_DBG 0
 #define NALLOC_MAGIC_INT 0x01FA110C
 #define LINREF_VERB 2
 #ifndef NONALLOC
@@ -358,7 +358,7 @@ void nalloc_profile_report(void){
 #endif  /* NONALLOC */
 
 err fake_linref_up(void){
-    if_dbg(T->nallocin.linrefs_held++);
+    assert(T->nallocin.linrefs_held++, 1);
     return 0;
 }
 
