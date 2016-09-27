@@ -64,22 +64,27 @@ dbg extern cnt bytes_used;
 
 typedef void (*linit)(void *);
 
-/* If ret and linfree(l) didn't subsequently complete:
-   - linalloc(h') != ret for all h', and
-   - h->t->lin_init returned and no nalloc function subsequently wrote to
-     the t->size - sizeof(lineage) bytes following l.
-   - !linref_up(l).
+/* TODO: still not quite right. Whole slabs get lin_init()ed at a time. */
+/* Let t = h->t.
+   
+   If ret and linfree(ret) didn't subsequently complete, then:
+   - linalloc(h') != ret for all h'.
+   - t->lin_init(ret) had returned and no nalloc function subsequently
+     wrote to the t->size bytes starting at ret.
+   - !linref_up(l', h->t) if ret <= l < ret + t->size.
 */
 checked void *linalloc(heritage *h);
 void linfree(lineage *l);
 
 /* TODO: mention heap_start/heap_end. */
 /* TODO: mention has_special_ref() */
-/* If !ret and linref_down(l) didn't subsequently complete, then:
-   - linref_up(l, t') == 0 iff t' == t, and
-   - If linalloc(h) == l, h->t == t, and
-   - h->t->lin_init returned and no nalloc function subsequently wrote to
-     the t->size - sizeof(lineage) bytes following l.
+/* If !ret and linref_down(l) didn't subsequently complete, then for all
+   l' | l <= l' < (u8 *) l + t->size:
+   - If linalloc(h) == l', h->t == t.
+   - !linref_up(l', t') iff t' == t.
+   - t->lin_init(ret) had returned and no nalloc function subsequently
+     wrote to memory between ret + sizeof(lineage) and ret + t->size. (NB:
+     but it may have written ret's lineage header.)
 */
 checked err linref_up(const volatile void *l, type *t);
 void linref_down(const volatile void *l, type *t);
