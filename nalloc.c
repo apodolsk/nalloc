@@ -86,7 +86,7 @@ void *(linalloc)(heritage *h){
 static
 block *(alloc_from_slab)(slab *s, heritage *h){
     if(s->contig_blocks)
-        return (block *) &blocks_of(s)[h->t->size * --s->contig_blocks];
+        return (void *) &blocks_of(s)[h->t->size * --s->contig_blocks];
     return mustp(cof(stack_pop(&s->free_blocks), block, sanc));
 }
 
@@ -209,7 +209,7 @@ slab *(slab_new)(heritage *h){
         cnt nb = s->contig_blocks = slab_max_blocks(s);
         if(h->t->lin_init)
             for(cnt b = 0; b < nb; b++)
-                h->t->lin_init((lineage *) &blocks_of(s)[b * h->t->size]);
+                h->t->lin_init((void *) &blocks_of(s)[b * h->t->size]);
         else
             for(cnt b = 0; b < nb; b++)
                 assertl(2, write_magics((block *) &blocks_of(s)[b * h->t->size],
@@ -265,7 +265,7 @@ cnt slab_max_blocks(const slab *s){
 static constfun 
 slab *(slab_of)(const block *b){
     assert(b);
-    return cof_aligned_pow2(b, slab);
+    return cof_aligned_pow2((void *) b, slab);
 }
 
 static constfun 
