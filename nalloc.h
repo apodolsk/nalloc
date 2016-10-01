@@ -38,13 +38,13 @@ typedef volatile struct slabfooter{
         iptr linrefs;
     } tx;
     sanchor sanc;
-    stack free_blocks;
+    stack local_blocks;
     cnt contig_blocks:WORDBITS/2;
     heritage *volatile her;
     align(CACHELINE_SIZE)
     lfstack hot_blocks;
 } slabfooter;
-#define SLABFOOTER {.free_blocks = STACK, .hot_blocks = LFSTACK}
+#define SLABFOOTER {.local_blocks = STACK, .hot_blocks = LFSTACK}
 #define MAX_BLOCK (SLAB_SIZE - sizeof(slabfooter))
 
 typedef struct align(SLAB_SIZE) slab{

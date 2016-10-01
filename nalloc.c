@@ -87,12 +87,12 @@ static
 block *(alloc_from_slab)(slab *s, heritage *h){
     if(s->contig_blocks)
         return (void *) &blocks_of(s)[h->t->size * --s->contig_blocks];
-    return mustp(cof(stack_pop(&s->free_blocks), block, sanc));
+    return mustp(cof(stack_pop(&s->local_blocks), block, sanc));
 }
 
 static
 bool slab_fully_hot(const slab *s){
-    return !s->contig_blocks && !stack_peek(&s->free_blocks);
+    return !s->contig_blocks && !stack_peek(&s->local_blocks);
 }
 
 typedef struct{
@@ -110,7 +110,7 @@ err (recover_hot_blocks)(slab *s){
         continue;
     if(!lfstack_peek(&h))
         return EARG;
-    s->free_blocks = lfstack_convert(&h);
+    s->local_blocks = lfstack_convert(&h);
     return 0;
 }
 
@@ -128,7 +128,7 @@ void (linfree)(lineage *l){
             continue;
         if(!st.lost && !fills_slab(st.size + 1, s->tx.t->size))
             return;
-        assert(!stack_peek(&s->free_blocks));
+        assert(!stack_peek(&s->local_blocks));
 
         struct heritage *her = s->her;
         if(xadd_iff(1, &her->nslabs, her->max_slabs) >= her->max_slabs){
@@ -140,7 +140,7 @@ void (linfree)(lineage *l){
         }else{
             while(!lfstack_clear_cas_won(hotst(0,0), &s->hot_blocks, &h))
                 continue;
-            s->free_blocks = lfstack_convert(&h);
+            s->local_blocks = lfstack_convert(&h);
             lfstack_push(&s->sanc, &her->slabs);
         }
         return;
