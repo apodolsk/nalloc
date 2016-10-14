@@ -1,7 +1,7 @@
 /**
- * TODO: need some heritage_destroy function, otherwise you likely leak
- * the slabs in local heritages when the thing to which they're local
- * dies.
+ * TODO: need some heritage_destroy function, lest you leak the slabs in
+ * local heritages when the thing to which they're local dies. Luckily,
+ * all the local things I've got die when the process dies.
  */
 
 #define MODULE NALLOC
@@ -49,18 +49,35 @@ dbg iptr slabs_used;
 dbg cnt bytes_used;
 dbg cnt max_bytes_used;
 
-#define PTYPE(s, ...) {#s, s, NULL, NULL}
-static const type polytypes[] = { MAP(PTYPE, _,
+/* Note the MAP and ITERATE macros. Non-trivial. */
+#define MALLOC_TYPE(s, ...) {#s, s, NULL, NULL}
+static const type malloctypes[] = { MAP(MALLOC_TYPE, _,
         16, 32, 48, 64, 80, 96, 112, 128,
         192, 256, 384, 512, 1024, MAX_BLOCK)
 };
 
-#define PHERITAGE(i, ...)                                           \
-    HERITAGE(&polytypes[i], 32, 1, new_slabs)
-static heritage poly_heritages[] = {
-    ITERATE(PHERITAGE, _, 14)
+#define MALLOC_HERITAGE(i, ...)                 \
+    HERITAGE(&malloctypes[i], 32, 1, new_slabs)
+static heritage malloc_heritages[] = {
+    ITERATE(MALLOC_HERITAGE, _, 14)
 };
 
+/* Fetch a slab s from h->slabs or else allocate a new one. Since all
+   slabs on h->slabs must contain a free block, it must be possible to
+   allocate from s in both cases.
+
+   To preserve the h->slabs property, don't return s to h->slabs iff it
+   becomes empty after allocation. Instead, mark it as lost, "leak" it,
+   and let the next linfree() onto s recover it. And there *must* be a
+   next linfree() onto s because the process of checking for emptiness and
+   marking s is atomic. (If it weren't, all blocks on s might be freed
+   between the check and the mark).
+
+   The key to atomicity is that blocks are returned only to
+   s->hot_blocks. If s->contig_blocks and s->local_blocks are empty, then
+   s is empty iff s->hot_blocks is empty. A single CAS suffices to mark
+   s->hot_blocks lost iff it's empty.
+*/
 void *(linalloc)(heritage *h){
     if(poisoned())
         return NULL;
@@ -75,7 +92,6 @@ void *(linalloc)(heritage *h){
     else
         must(xadd(-1, &h->nslabs));
 
-
     assert(b);
     assert(aligned_pow2(b, MIN_ALIGN));
     assert(profile_upd_alloc(h->t->size), 1);
@@ -83,6 +99,12 @@ void *(linalloc)(heritage *h){
     return b;
 }
 
+/* It's also true that every slab on h->slabs has a free block in
+   s->contig_blocks or s->local_blocks. alloc_from_slab() exploits this,
+   but it's not critical. It's just a side effect of the fact that it's
+   optimal to clear out s->hot_blocks when checking for emptiness in
+   recover_hot_blocks().
+*/
 static
 block *(alloc_from_slab)(slab *s, heritage *h){
     if(s->contig_blocks)
@@ -97,15 +119,15 @@ bool slab_fully_hot(const slab *s){
 
 typedef struct{
     uptr lost:1;
+    uptr deciding:1
     uptr size:WORDBITS - 1;
 } hotst;
-#define hotst(l, s) ((hotst){l, s})
 
 static
 err (recover_hot_blocks)(slab *s){
     assert(!PUN(hotst, lfstack_gen(&s->hot_blocks)).lost);
     struct lfstack h = s->hot_blocks;
-    while(!lfstack_clear_cas_won(hotst(!lfstack_peek(&h), 0),
+    while(!lfstack_clear_cas_won((hotst){.lost = !lfstack_peek(&h)},
                                  &s->hot_blocks, &h))
         continue;
     if(!lfstack_peek(&h))
@@ -114,52 +136,68 @@ err (recover_hot_blocks)(slab *s){
     return 0;
 }
 
+/* Exploit slab natural alignment to discover s, atomically [push to
+   s->hot_blocks, clear its lost flag, and increment its size field iff ].
+
+   If you cleared the flag, then decide whether to return s to its
+   heritage or free it. Crucially,
+
+   Returning is simply a push onto s->her->slabs. Again, it's optimal to
+   clear out 
+
+   If deciding to free it, then leave it "leaked" so that free blocks can
+   accumulate until it's full. Since s.lost implies slab_fully_hot(s), and
+   linalloc() won't cl
+   
+*/
 void (linfree)(lineage *l){
     block *b = l;
     *b = (block){SANCHOR};
 
     slab *s = slab_of(b);
     assert(profile_upd_free(s->tx.t->size), 1);
-    
-    for(struct lfstack h = s->hot_blocks;;){
-        hotst st = PUN(hotst, lfstack_gen(&h));
-        if(!lfstack_push_upd_won(&l->sanc, rup(st, .lost=0, .size++),
-                                 &s->hot_blocks, &h))
-            continue;
-        if(!st.lost && !fills_slab(st.size + 1, s->tx.t->size))
-            return;
-        assert(!stack_peek(&s->local_blocks));
 
-        struct heritage *her = s->her;
-        if(xadd_iff(1, &her->nslabs, her->max_slabs) >= her->max_slabs){
-            if(fills_slab(st.size + 1, s->tx.t->size)){
-                s->contig_blocks = st.size + 1;
-                s->hot_blocks = (lfstack) LFSTACK;
-                slab_ref_down(s);
-            }
-        }else{
-            while(!lfstack_clear_cas_won(hotst(0,0), &s->hot_blocks, &h))
-                continue;
-            s->local_blocks = lfstack_convert(&h);
-            lfstack_push(&s->sanc, &her->slabs);
-        }
+    struct lfstack h = s->hot_blocks;
+    hotst st;
+    do
+        st = PUN(hotst, lfstack_gen(&h));
+    while(!lfstack_push_upd_won(&l->sanc,
+                                rup(st, .lost=0, .deciding=st.lost, .size++),
+                                &s->hot_blocks, &h))
+        continue;
+
+    if(!st.lost && !fills_slab(st.size + 1, s->tx.t->size))
         return;
+    assert(!stack_peek(&s->local_blocks));
+
+    struct heritage *her = s->her;
+    if(xadd_iff(1, &her->nslabs, her->max_slabs) >= her->max_slabs){
+        if(fills_slab(st.size + 1, s->tx.t->size)){
+            s->contig_blocks = st.size + 1;
+            s->hot_blocks = (lfstack) LFSTACK;
+            slab_ref_down(s);
+        }
+    }else{
+        while(!lfstack_clear_cas_won((hotst){}, &s->hot_blocks, &h))
+            continue;
+        s->local_blocks = lfstack_convert(&h);
+        lfstack_push(&s->sanc, &her->slabs);
     }
 }
 
-/* NB: avoids division. Subtracts bs to handle padding between last block
-   and footer. */
+/* Avoids division. Subtracts bs to handle padding between last block and
+   footer. */
 static bool fills_slab(cnt blocks, size bs){
     assert(blocks * bs <= MAX_BLOCK);
     return blocks * bs > MAX_BLOCK - bs;
 }
 
 static
-heritage *poly_heritage_of(size size){
-    for(uint i = 0; i < ARR_LEN(polytypes); i++)
-        if(polytypes[i].size >= size)
-            return &poly_heritages[i];
-    EWTF();
+heritage *malloc_heritage_of(size size){
+    for(uint i = 0; i < ARR_LEN(malloctypes); i++)
+        if(malloctypes[i].size >= size)
+            return &malloc_heritages[i];
+    EWTF("Size is assumed < MAX_BLOCK, but ");
 }
 
 void *(malloc)(size size){
@@ -167,9 +205,9 @@ void *(malloc)(size size){
         return TODO(), NULL;
     if(size > MAX_BLOCK)
         return TODO(), NULL;
-    block *b = (linalloc)(poly_heritage_of(size));
+    block *b = (linalloc)(malloc_heritage_of(size));
     if(b)
-        assertl(2, magics_valid(b, poly_heritage_of(size)->t->size));
+        assertl(2, magics_valid(b, malloc_heritage_of(size)->t->size));
     return b;
 }
 
