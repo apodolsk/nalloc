@@ -1,5 +1,19 @@
 #pragma once
 
+/* Documentation conventions:
+   - Time is tricky to talk about in a concurrent context, and I'm still
+     learning how to do it. I believe the following should suffice:
+     
+   - Each function has a single completion point and there's a global
+     order of completion points with which all threads agree.
+   - The return value of a function is determined at its completion point.
+   - Each comment about a function is implicitly prefaced with:
+     "For any call C returning 'ret' and taking the named arguments,
+      at all times after C completes,
+      in all threads:"
+   - Past perfect tense specifies some time before the completion point.
+*/
+
 #include <list.h>
 #include <stack.h>
 
@@ -66,23 +80,6 @@ dbg extern cnt bytes_used;
 
 typedef void (*linit)(void *);
 
-/* Documentation conventions:
-   - Time is a little tricky to talk about. Luckily, on x86, each function
-     has a single completion point and a single order of completions is
-     observed by all threads.
-   - Every group of statements about a function is implicitly prefaced
-     with:
-     "For any call C returning ret and taking the named arguments, at all
-      times after C completes and in all threads"
-      true for all
-     calls returning ret and taking Statements about a function reference the arguments and return value
-     of a particular invocation. However, they're true at any time after
-     the call returned.
-   - Present tense refers to any time after the
-   - */
-
-/* Documentation will be a little weird because I'm trying to talk very
-   precisely. */
 
 /* Let type *t = h->t.
 
@@ -104,8 +101,8 @@ void linfree(lineage *l);
      outside of nalloc.
 
    Otherwise:
-   If !ret and more linref_up(l, t) calls returned 0 than linref_down(l,
-   t) calls completed, then EITHER:
+   If !ret and more linref_up(l, t) calls returned 0 than linref_down(l, t)
+   calls completed, then EITHER:
    - There exists void *o | in_obj(o, l, t->size) and:
      - If linalloc(h) == o, h->t == t.
      - For any void *p | in_obj(o, p, t->size):
@@ -115,30 +112,12 @@ void linfree(lineage *l);
    - OR !t->has_special_ref(l, true)
 
    If ret, linfree(o) must have completed for similarly defined o.
-
-   In other words, linref_up(l, t) says:
-   - l is inside an object that's been initialized according to t.
-   - Every thread will agree that l "has type t".
-   - If threads cooperate to maintain invariants of t in o, then nalloc
-     won't ruin this by clobbering any part of o except its lineage
-     header. This is true even if o is freed and reallocated.
-
-   - A few subtleties:
-     - *Every* byte of an object allocated with type t "has" type t. This
-       means that each function on a data structure using container_of()
-       and embedded traversal fields can't just call
-       linref_up("node_type"). Instead, e.g. callers of lflist_enq(l) must
-       pass the type * of the objects whose traversal fields are enqueued
-       on the list. This type must be the same for all such objects.
-     - There's no useful guarantee about when linref_up(p, t) must
-       fail. In particular, it can succeed even though p was never ever
-       allocated. This is because every byte of a *slab* has the same
-       type, even the never-allocated ones.
 */
 checked err linref_up(const volatile void *l, type *t);
 
-/* Undefined unless, just before the call, there were more linref_up(l, t)
-   calls which returned 0 than there were completed linref_down(l, t) calls.
+/* Undefined unless, at the time of completion, there were more
+   linref_up(l, t) calls which returned 0 than there were completed
+   linref_down(l, t) calls.
 */
 void linref_down(const volatile void *l, type *t);
 

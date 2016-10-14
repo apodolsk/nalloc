@@ -1,7 +1,56 @@
-/**
- * TODO: need some heritage_destroy function, lest you leak the slabs in
- * local heritages when the thing to which they're local dies. Luckily,
- * all the local things I've got die when the process dies.
+/* To save you from jumping across files:
+
+   ----TYPES:
+   
+   u8 - unsigned char
+   uptr, cnt, idx, size - uintptr_t
+   dptr - __int128_t on x86-64
+   err - int
+   
+   ----MACROS:
+
+   EARG/EARG() = -1
+
+   PUN(t, e):
+     ret == e "reinterpreted" as type t.
+   
+   cof(p, container_t, field):
+     If p, &((container_t *) ret)->field == p, else ret == NULL.
+
+   cof_aligned_pow2(p, t):
+     ret is p aligned down to a multiple of sizeof(t). sizeof(t) must be
+     power of 2.
+
+   rup(orig, changes...):
+     The fields of ret and orig will be equal, except that ret == val for
+     each arg of the form ".field = val" in changes. orig will be
+     unmodified, except as a side effect of evaluating changes.
+
+   mustp/must(e):
+     Like assert(e), except e is evaluated even with debugging off.
+
+   ----FUNCTIONS:
+   
+   cas2_won(dptr n, volatile dptr *p, dptr *old):
+     Atomically:
+     [dptr r;
+      *p = n iff (r = *p) == *old;
+      *old = r;
+      return r == *old].
+     Arguments are converted to dptr[*] with a macro wrapper.
+   
+   xadd_iff(d, *p, lim):
+     Atomically [*p += d iff *p + d <= lim]
+   
+   bool lfstack_clear_cas_won(uptr new_gen, lfstack *p, lfstack *old):
+     Atomically set *p = (lfstack){.top = NULL, .gen=new_gen} iff *p ==
+     *old, setting *old = *p upon failure.
+   
+   bool lfstack_push_cas_won(sanchor *new_top, uptr new_gen,
+                             lfstack *p, lfstack *old)
+     Atomically push new_top to p and set *p.gen = new_gen iff *p ==
+     old, setting *old = *p upon failure. 
+                             
  */
 
 #define MODULE NALLOC
@@ -11,14 +60,13 @@
 #include <nalloc.h>
 #include <thread.h>
 
-/* Prevents system library functions from using nalloc. Useful for
+/* Prevents certain system functions from using nalloc. Useful for
    debugging. */
 #pragma GCC visibility push(hidden)
 
 #define LINREF_ACCOUNT_DBG 0
 #define NALLOC_MAGIC_INT 0x01FA110C
 #define LINREF_VERB 2
-#ifndef NONALLOC
 
 static slab *slab_new(heritage *h);
 static void slab_ref_down(slab *s);
@@ -43,13 +91,13 @@ static void profile_upd_alloc(size s);
 
 lfstack shared_free_slabs = LFSTACK;
 
-dbg iptr slabs_allocated;
-dbg iptr slabs_used;
+dbg iptr slabs_in_use;
+dbg iptr total_slabs_used;
 
-dbg cnt bytes_used;
-dbg cnt max_bytes_used;
+dbg cnt bytes_in_use;
+dbg cnt max_bytes_in_use;
 
-/* Note the MAP and ITERATE macros. Non-trivial. */
+/* Note the MAP and ITERATE macros. Cool, huh? */
 #define MALLOC_TYPE(s, ...) {#s, s, NULL, NULL}
 static const type malloctypes[] = { MAP(MALLOC_TYPE, _,
         16, 32, 48, 64, 80, 96, 112, 128,
@@ -66,17 +114,18 @@ static heritage malloc_heritages[] = {
    slabs on h->slabs must contain a free block, it must be possible to
    allocate from s in both cases.
 
-   To preserve the h->slabs property, don't return s to h->slabs iff it
+   To preserve this h->slabs property, don't return s to h->slabs iff it
    becomes empty after allocation. Instead, mark it as lost, "leak" it,
-   and let the next linfree() onto s recover it. And there *must* be a
-   next linfree() onto s because the process of checking for emptiness and
-   marking s is atomic. (If it weren't, all blocks on s might be freed
-   between the check and the mark).
+   and let the next linfree() onto s return it to h->slabs.
 
-   The key to atomicity is that blocks are returned only to
-   s->hot_blocks. If s->contig_blocks and s->local_blocks are empty, then
-   s is empty iff s->hot_blocks is empty. A single CAS suffices to mark
-   s->hot_blocks lost iff it's empty.
+   There must be a "next" linfree() onto s because the process of checking
+   for emptiness and marking s is atomic. (If it weren't, all blocks on s
+   might be freed between the check and the mark.)
+
+   The key to this atomicity is that, unless s is marked as lost, blocks
+   are returned only to s->hot_blocks. If s->contig_blocks and
+   s->local_blocks are empty, then s is empty iff s->hot_blocks is
+   empty. A single CAS suffices to mark s->hot_blocks lost iff it's empty.
 */
 void *(linalloc)(heritage *h){
     if(poisoned())
@@ -119,7 +168,6 @@ bool slab_fully_hot(const slab *s){
 
 typedef struct{
     uptr lost:1;
-    uptr deciding:1
     uptr size:WORDBITS - 1;
 } hotst;
 
@@ -136,19 +184,57 @@ err (recover_hot_blocks)(slab *s){
     return 0;
 }
 
-/* Exploit slab natural alignment to discover s, atomically [push to
-   s->hot_blocks, clear its lost flag, and increment its size field iff ].
+/* Find the slab s containing b. Push b to s->hot_blocks iff s isn't lost,
+   and clear s's lost flag otherwise. I refer to the flag here as
+   "s->lost".
 
-   If you cleared the flag, then decide whether to return s to its
-   heritage or free it. Crucially,
+   If clearing s->lost, decide whether to s should be freed or returned to
+   its heritage.
 
-   Returning is simply a push onto s->her->slabs. Again, it's optimal to
-   clear out 
+   In the first case:
 
-   If deciding to free it, then leave it "leaked" so that free blocks can
-   accumulate until it's full. Since s.lost implies slab_fully_hot(s), and
-   linalloc() won't cl
-   
+   Push b to s->hot_blocks and do nothing special. The thread which frees
+   the last block in s will free s. There's a "last" block because all
+   blocks will be in s->hot_blocks and s->hot_blocks.gen stores an
+   always-accurate size field. The "last" is the one whose push fills
+   s->hot_blocks, according to the size field.
+
+   All blocks will be in s->hot_blocks because only linalloc() adds blocks
+   to other sets. But no linalloc() will find s in a heritage until s is
+   freed because:
+   - Let T1 be the time you cleared s->lost.
+   - S was empty and thus not on a heritage at T1, and only a linfree()
+     which clears s->lost (or frees s) will add it to a heritage. So some
+     other linfree() must have cleared s->lost. Let T2 be the first time
+     this happened.
+   - Only linalloc() sets s->lost, so some linalloc() L must have done so
+     between T1 and T2.
+   - L must have found s in a heritage after T1 (true, but needs proof),
+     so some linfree() between T1 and T2 must have added s to a heritage
+     and thus cleared s->lost. But T2 was the first time this happened.
+
+   In the second case:
+
+   Push b to s->local_blocks and push s to s->her->slabs. The subtlety is
+   that neither stack_push() nor lfstack_push() allow concurrent pushes of
+   the same node. Luckily, no other thread will write to s->sanc, b->sanc,
+   or s->local_blocks until you finish.
+
+   This is because:
+   - s won't be freed until you finish because you didn't add b to
+     s->hot_blocks.
+   - So, as in the other case, no linalloc() will find s in a heritage.
+   - As in the other case, threads in linfree() will write only to
+     s->hot_blocks until s is freed or a linalloc() sets s->lost.
+
+   ----
+
+   Note that if linfree() clears the lost flag and decides to free s, it
+   simply restarts the main loop and pushes b to s->hot_blocks as if it
+   had entered linfree() anew. This is because it's possible for it to
+   clear the lost flag and then be delayed so long that its subsequent
+   push to s->hot_blocks fills s->hot_blocks. It must check for this case
+   just like any thread entering linfree().
 */
 void (linfree)(lineage *l){
     block *b = l;
@@ -157,32 +243,33 @@ void (linfree)(lineage *l){
     slab *s = slab_of(b);
     assert(profile_upd_free(s->tx.t->size), 1);
 
-    struct lfstack h = s->hot_blocks;
-    hotst st;
-    do
-        st = PUN(hotst, lfstack_gen(&h));
-    while(!lfstack_push_upd_won(&l->sanc,
-                                rup(st, .lost=0, .deciding=st.lost, .size++),
-                                &s->hot_blocks, &h))
-        continue;
+    heritage *her = s->her;
 
-    if(!st.lost && !fills_slab(st.size + 1, s->tx.t->size))
-        return;
-    assert(!stack_peek(&s->local_blocks));
-
-    struct heritage *her = s->her;
-    if(xadd_iff(1, &her->nslabs, her->max_slabs) >= her->max_slabs){
-        if(fills_slab(st.size + 1, s->tx.t->size)){
-            s->contig_blocks = st.size + 1;
-            s->hot_blocks = (lfstack) LFSTACK;
-            slab_ref_down(s);
-        }
-    }else{
-        while(!lfstack_clear_cas_won((hotst){}, &s->hot_blocks, &h))
+    for(struct lfstack h = s->hot_blocks;;){
+        hotst st = PUN(hotst, lfstack_gen(&h));
+        if(!st.lost){
+            if(!lfstack_push_cas_won(&l->sanc, rup(st, .size++),
+                                     &s->hot_blocks, &h))
+                continue;
+            if(fills_slab(st.size + 1, s->tx.t->size)){
+                assert(!stack_peek(&s->local_blocks));
+                
+                s->contig_blocks = st.size + 1;
+                s->hot_blocks = (lfstack) LFSTACK;
+                slab_ref_down(s);
+            }
+            return;
+        }else if(!lfstack_clear_cas_won((hotst){}, &s->hot_blocks, &h))
             continue;
-        s->local_blocks = lfstack_convert(&h);
-        lfstack_push(&s->sanc, &her->slabs);
+
+        assert(!stack_peek(&s->local_blocks));
+        if(xadd_iff(1, &her->nslabs, her->max_slabs) < her->max_slabs)
+            break;
+        h = (lfstack) LFSTACK;
     }
+        
+    stack_push(&b->sanc, &s->local_blocks);
+    lfstack_push(&s->sanc, &her->slabs);
 }
 
 /* Avoids division. Subtracts bs to handle padding between last block and
@@ -219,7 +306,15 @@ void (free)(void *b){
     (linfree)(l);
 }
 
+/* Fairly straightforward. 
 
+   Note that slab allocations are batched. 
+
+   Note that block initialization is also batched. Since linref_up() is
+   entirely slab-oriented, the h->lin_init() function should set up "type
+   invariants" on all blocks before linref_up() is allowed to succeed on
+   the slab. It's avoidable.
+*/
 static
 slab *(slab_new)(heritage *h){
     slab *s = cof(lfstack_pop(h->free_slabs), slab, sanc);
@@ -227,7 +322,7 @@ slab *(slab_new)(heritage *h){
         s = h->new_slabs(h->slab_alloc_batch);
         if(!s)
             return NULL;
-        assert(xadd(h->slab_alloc_batch, &slabs_allocated), 1);
+        assert(xadd(h->slab_alloc_batch, &total_slabs_used), 1);
         assert(aligned_pow2(s, SLAB_SIZE));
         
         s->slabfooter = (slabfooter) SLABFOOTER;
@@ -236,7 +331,7 @@ slab *(slab_new)(heritage *h){
             lfstack_push(&si->sanc, h->free_slabs);
         }
     }
-    assert(xadd(1, &slabs_used) >= 0);
+    assert(xadd(1, &slabs_in_use) >= 0);
     assert(!s->tx.linrefs);
     assert(!lfstack_peek(&s->hot_blocks));
     
@@ -264,7 +359,7 @@ void (slab_ref_down)(slab *s){
     assert(s->tx.t);
     if(must(xadd((uptr) -1, &s->tx.linrefs)) == 1){
         assert(!lfstack_peek(&s->hot_blocks));
-        assert(xadd(-1, &slabs_used));
+        assert(xadd(-1, &slabs_in_use));
         lfstack_push(&s->sanc, s->her->free_slabs);
     }
 }
@@ -329,7 +424,9 @@ void *(calloc)(size nb, size bs){
 
 void *(realloc)(void *o, size size){
     u8 *b = (malloc)(size);
-    if(b && o)
+    if(!b)
+        return NULL;
+    if(o)
         memcpy(b, o, size);
     free(o);
     return b;
@@ -352,21 +449,18 @@ int magics_valid(block *b, size bytes){
 }
 
 void *memalign(size align, size sz){
-    TODO();
-    assert(sz <= MAX_BLOCK
-           && align < PAGE_SIZE
-           && align * (sz / align) == align);
-    if(!is_pow2(align) || align < sizeof(void *))
-        return NULL;
+    assert(align <= sz);
+    assert(is_pow2(align));
     return malloc(sz);
 }
 
 int posix_memalign(void **mptr, size align, size sz){
-    return (*mptr = memalign(align, sz)) ? 0 : -1;
+    *mptr = memalign(align, sz);
+    return *mptr ? 0 : -1;
 }
 
 void *pvalloc(size sz){
-    EWTF();
+    TODO();
 }
 
 void *aligned_alloc(size align, size sz){
@@ -374,26 +468,23 @@ void *aligned_alloc(size align, size sz){
 }
 
 void *valloc(size sz){
-    EWTF();
+    TODO();
 }
 
 void profile_upd_alloc(size s){
-    cnt u = xadd(s, &bytes_used);
-    for(cnt mb = max_bytes_used; mb < u;)
-        if(cas_won(u, &max_bytes_used, &mb))
+    cnt u = xadd(s, &bytes_in_use);
+    for(cnt mb = max_bytes_in_use; mb < u;)
+        if(cas_won(u, &max_bytes_in_use, &mb))
             break;
 }
 
 void profile_upd_free(size s){
-    xadd(-s, &bytes_used);
+    xadd(-s, &bytes_in_use);
 }
 
-/* TODO: keep track of size */
 void nalloc_profile_report(void){
-    ppl(0, slabs_allocated, slabs_used, bytes_used, max_bytes_used);
+    ppl(0, total_slabs_used, slabs_in_use, bytes_in_use, max_bytes_in_use);
 }
-
-#endif  /* NONALLOC */
 
 err fake_linref_up(void){
     assert(T->nallocin.linrefs_held++, 1);
@@ -414,11 +505,11 @@ void linref_account_close(linref_account *a){
 }
 
 void byte_account_open(byte_account *a){
-    assert(a->baseline = bytes_used, 1);
+    assert(a->baseline = bytes_in_use, 1);
 }
 
 void byte_account_close(byte_account *a){
-    assert(a->baseline == bytes_used);
+    assert(a->baseline == bytes_in_use);
 }
 
 #pragma GCC visibility pop
