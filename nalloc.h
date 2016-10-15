@@ -2,10 +2,10 @@
 
 /* Documentation conventions:
    - Time is tricky to talk about in a concurrent context, and I'm still
-     learning how to do it. I believe the following suffices:
-   - Each function has a single completion point and there's a global
-     order of completion points with which all threads agree.
-   - The return value of a function is determined at its completion point.
+     learning how to do it. I think the following holds and suffices:
+   - Each function has a single completion point, at which its return
+     value is determined. There's a global order of completion points upon
+     which all threads can agree.
    - Each comment about a function is implicitly prefaced with:
      "For any call C returning 'ret' and taking the named arguments,
       at all times after C completes,
@@ -94,12 +94,7 @@ typedef void (*linit)(void *);
 checked void *linalloc(heritage *h);
 void linfree(lineage *l);
 
-/* Undefined iff:
-   - heap_start() <= l <= heap_end() but l is on a page last mapped
-     outside of nalloc.
-
-   Otherwise:
-   If !ret and more linref_up(l, t) calls returned 0 than linref_down(l, t)
+/* If !ret and more linref_up(l, t) calls returned 0 than linref_down(l, t)
    calls completed, then EITHER:
    - There exists void *o | in_obj(o, l, t->size) and:
      - If linalloc(h) == o, h->t == t.
@@ -110,6 +105,10 @@ void linfree(lineage *l);
    - OR !t->has_special_ref(l, true)
 
    If ret, linfree(o) must have completed for similarly defined o.
+
+   The program is dangerously undefined iff:
+   - At the time of completion, heap_start() <= l <= heap_end() but l was
+     on a page last mapped outside of nalloc.
 
    (In general, I'm a little fuzzy on how to talk about dangerously
    undefined effects vs a harmless absence of guarantees. For instance, if
@@ -183,6 +182,9 @@ void byte_account_close(byte_account *a);
 #define pudef (heritage, "(her){%}", a->t)
 #include <pudef.h>
 
+/* trace() automatically prints the names, args, and any return value of
+   its traced function. It uses _Generic and type aliases to look up
+   pretty printers defined via pudef. Cool, huh? */
 #define smalloc(as...) trace(NALLOC, 1, smalloc, as)
 #define sfree(as...) trace(NALLOC, 1, sfree, as)
 #define malloc(as...) trace(NALLOC, 1, malloc, as)

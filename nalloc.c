@@ -1,32 +1,33 @@
 /* See nalloc.h first. */
 
-/* To save you from jumping across files:
+/* To save some jumping around:
 
    ----TYPES:
    
-   u8 - unsigned char
-   uptr, cnt, idx, size - uintptr_t
+   uptr, cnt, idx - uintptr_t
    dptr - __int128_t on x86-64
-   err - int
+   err - int. 0 is the absence of error.
    
    ----MACROS:
 
    EARG/EARG() = -1
 
    PUN(t, e):
-     ret == e "reinterpreted" as type t.
+     Expands to a value of type t whose representation is the
+     reinterpreted representation of e.
    
    cof(p, container_t, field):
-     If p, &((container_t *) ret)->field == p, else ret == NULL.
+     Expands to container_t *ret | if p, &ret->field == p, else ret == NULL.
 
    cof_aligned_pow2(p, t):
-     ret is p aligned down to a multiple of sizeof(t). sizeof(t) must be
-     power of 2.
+     Expands to p aligned down to a multiple of sizeof(t). sizeof(t) must
+     be power of 2.
 
    rup(orig, changes...):
-     The fields of ret and orig will be equal, except that ret == val for
-     each arg of the form ".field = val" in changes. orig will be
-     unmodified, except as a side effect of evaluating each val.
+     Functional-style record update. Expands to ret | ret == val for each
+     arg of the form ".field = val" in changes, and the fields of ret and
+     orig are otherwise equal. orig will be unmodified, except as a side
+     effect of evaluating a val.
 
    mustp/must(e):
      Like assert(e), except e is evaluated even with debugging off.
@@ -34,24 +35,20 @@
    ----FUNCTIONS:
    
    cas2_won(dptr n, volatile dptr *p, dptr *old):
-     Atomically:
-     [dptr r;
-      *p = n iff (r = *p) == *old;
-      *old = r;
-      return r == *old].
-     Arguments are converted to dptr[*] with a macro wrapper.
-   
-   xadd_iff(d, *p, lim):
-     Atomically [*p += d iff *p + d <= lim]
+     An ill-advised wrapper around __atomic_compare_exchange_n(p, old, n,
+     ...).
+     Arguments are punned to dptr[*].
    
    bool lfstack_clear_cas_won(uptr new_gen, lfstack *p, lfstack *old):
      Atomically set *p = (lfstack){.top = NULL, .gen=new_gen} iff *p ==
      *old, setting *old = *p upon failure.
+     new_gen is punned to uptr.
    
    bool lfstack_push_cas_won(sanchor *new_top, uptr new_gen,
                              lfstack *p, lfstack *old)
-     Atomically push new_top to p and set *p.gen = new_gen iff *p ==
-     old, setting *old = *p upon failure. 
+     Atomically push new_top to p and set p->gen = new_gen iff *p == old,
+     setting *old = *p upon failure.
+     new_gen is punned to uptr.
                              
  */
 
@@ -124,8 +121,8 @@ static heritage malloc_heritages[] = {
    for emptiness and marking s is atomic. (If it weren't, all blocks on s
    might be freed between the check and the mark.)
 
-   The key to this atomicity is that, unless s is marked as lost, blocks
-   are returned only to s->hot_blocks. If s->contig_blocks and
+   The key to this atomicity is that, until s is marked as lost, blocks
+   will be returned only to s->hot_blocks. If s->contig_blocks and
    s->local_blocks are empty, then s is empty iff s->hot_blocks is
    empty. A single CAS suffices to mark s->hot_blocks lost iff it's empty.
 */
@@ -152,7 +149,7 @@ void *(linalloc)(heritage *h){
 
 /* It's also true that every slab on h->slabs has a free block in
    s->contig_blocks or s->local_blocks. alloc_from_slab() exploits this,
-   but it's not critical. It's just a side effect of the fact that it's
+   as does linfree(). Luckily, it's easy to preserve this because it's
    optimal to clear out s->hot_blocks when checking for emptiness in
    recover_hot_blocks().
 */
@@ -176,7 +173,7 @@ typedef struct{
 static
 err (recover_hot_blocks)(slab *s){
     assert(!PUN(hotst, lfstack_gen(&s->hot_blocks)).lost);
-    struct lfstack h = s->hot_blocks;
+    struct lfstack h = lfstack_read(&s->hot_blocks);
     while(!lfstack_clear_cas_won((hotst){.lost = !lfstack_peek(&h)},
                                  &s->hot_blocks, &h))
         continue;
@@ -195,32 +192,33 @@ err (recover_hot_blocks)(slab *s){
 
    In the first case:
 
-   Push b to s->hot_blocks and do nothing special. The thread which frees
-   the last block in s will free s. There's a "last" block because all
-   blocks will be in s->hot_blocks and s->hot_blocks.gen stores an
-   always-accurate size field. The "last" is the one whose push fills
-   s->hot_blocks, according to the size field.
+   Restart, pushing b to s->hot_blocks like a normal linfree(). The thread
+   which frees the last block in s will free s. There's a "last" block
+   because all blocks will be in s->hot_blocks and s->hot_blocks.gen
+   stores an always-accurate size field. The "last" is the one whose push
+   fills s->hot_blocks, according to the size field.
 
    All blocks will be in s->hot_blocks because only linalloc() adds blocks
    to other sets. But no linalloc() will find s in a heritage until s is
    freed because:
    - Let T1 be the time you cleared s->lost.
-   - S was empty and thus not on a heritage at T1, and only a linfree()
-     which clears s->lost (or frees s) will add it to a heritage. So some
+   - s was empty and thus not on a heritage at T1, and only a linfree()
+     which clears s->lost (or frees s) could add it to a heritage. So some
      other linfree() must have cleared s->lost. Let T2 be the first time
      this happened.
    - Only linalloc() sets s->lost, so some linalloc() L must have done so
      between T1 and T2.
-   - L must have found s in a heritage after T1 (true, but needs proof),
-     so some linfree() between T1 and T2 must have added s to a heritage
-     and thus cleared s->lost. But T2 was the first time this happened.
+   - L must have found s in a heritage after T1 (*), so some linfree()
+     between T1 and T2 must have added s to a heritage and thus cleared
+     s->lost. But T2 was the first time this happened.
+     - (*) needs a bit more proof.
 
    In the second case:
 
-   Push b to s->local_blocks and push s to s->her->slabs. The subtlety is
-   that neither stack_push() nor lfstack_push() allow concurrent pushes of
-   the same node. Luckily, no other thread will write to s->sanc, b->sanc,
-   or s->local_blocks until you finish.
+   Push b to s->local_blocks, push s to s->her->slabs, and return. The
+   subtlety is that neither stack_push() nor lfstack_push() allow
+   concurrent pushes of the same node. Luckily, no other thread will write
+   to s->sanc, b->sanc, or s->local_blocks until you finish.
 
    This is because:
    - s won't be freed until you finish because you didn't add b to
@@ -229,25 +227,16 @@ err (recover_hot_blocks)(slab *s){
    - As in the other case, threads in linfree() will write only to
      s->hot_blocks until s is freed or a linalloc() sets s->lost.
 
-   ----
-
-   Note that if linfree() clears the lost flag and decides to free s, it
-   simply restarts the main loop, pushing b to s->hot_blocks as if it had
-   entered linfree() anew. This is because it's possible for it to clear
-   the lost flag and then be delayed so long that its subsequent push to
-   s->hot_blocks fills s->hot_blocks. It must check for this case just
-   like any thread entering linfree().
 */
 void (linfree)(lineage *l){
     block *b = l;
     *b = (block){SANCHOR};
 
     slab *s = slab_of(b);
-    assert(profile_upd_free(s->tx.t->size), 1);
-
     heritage *her = s->her;
-
-    for(struct lfstack h = s->hot_blocks;;){
+    assert(profile_upd_free(s->tx.t->size), 1);
+    
+    for(struct lfstack h = lfstack_read(&s->hot_blocks);;){
         hotst st = PUN(hotst, lfstack_gen(&h));
         if(!st.lost){
             if(!lfstack_push_cas_won(&l->sanc, rup(st, .size++),
@@ -265,7 +254,7 @@ void (linfree)(lineage *l){
             continue;
 
         assert(!stack_peek(&s->local_blocks));
-        if(xadd_iff(1, &her->nslabs, her->max_slabs) < her->max_slabs)
+        if(xadd_iff_less(1, &her->nslabs, her->max_slabs) < her->max_slabs)
             break;
         h = (lfstack) LFSTACK;
     }
@@ -312,10 +301,10 @@ void (free)(void *b){
 
    Note that slab allocations are batched. 
 
-   Note that block initialization is also batched. Since linref_up() is
-   entirely slab-oriented, the h->lin_init() function should set up "type
-   invariants" on all blocks before linref_up() is allowed to succeed on
-   the slab. It's avoidable.
+   Note also that block initialization is batched. linref_up() is entirely
+   slab-oriented, so h->lin_init() sets up "type invariants" on all blocks
+   before linref_up() is allowed to succeed on the slab. This could be
+   avoided through careful use of contig_blocks, but I don't do this.
 */
 static
 slab *(slab_new)(heritage *h){
