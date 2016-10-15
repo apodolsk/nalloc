@@ -98,7 +98,6 @@ dbg iptr total_slabs_used;
 dbg cnt bytes_in_use;
 dbg cnt max_bytes_in_use;
 
-/* Note the MAP and ITERATE macros. Cool, huh? */
 #define MALLOC_TYPE(s, ...) {#s, s, NULL, NULL}
 static const type malloctypes[] = { MAP(MALLOC_TYPE, _,
         16, 32, 48, 64, 80, 96, 112, 128,

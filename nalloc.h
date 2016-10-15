@@ -182,9 +182,11 @@ void byte_account_close(byte_account *a);
 #define pudef (heritage, "(her){%}", a->t)
 #include <pudef.h>
 
-/* trace() automatically prints the names, args, and any return value of
-   its traced function. It uses _Generic and type aliases to look up
-   pretty printers defined via pudef. Cool, huh? */
+/* trace() automatically prints the args and any return value of its
+   traced function. It uses _Generic() macro tricks to look up pretty
+   printers for user-defined types registered via pudef. puprintf(),
+   log(), pp() etc. use the same type-based logic to do formatted printing
+   without any conversion specifiers. Cool, huh? */
 #define smalloc(as...) trace(NALLOC, 1, smalloc, as)
 #define sfree(as...) trace(NALLOC, 1, sfree, as)
 #define malloc(as...) trace(NALLOC, 1, malloc, as)
