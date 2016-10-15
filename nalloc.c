@@ -32,12 +32,14 @@
    mustp/must(e):
      Like assert(e), except e is evaluated even with debugging off.
 
-   ----FUNCTIONS:
-   
+   ----'FUNCTIONS':
+
    cas2_won(dptr n, volatile dptr *p, dptr *old):
-     An ill-advised wrapper around __atomic_compare_exchange_n(p, old, n,
-     ...).
-     Arguments are punned to dptr[*].
+     A wrapper around __atomic_compare_exchange(p, old, n, ...).
+     Arguments are punned to dptr[*] via macro wrapper.
+     (Exists mainly because __atomic_compare_exchange() is still
+     miscompiled on non-integral types. gcc will ICE and clang will
+     complain about C structs being non-trivially-copyable.)
    
    bool lfstack_clear_cas_won(uptr new_gen, lfstack *p, lfstack *old):
      Atomically set *p = (lfstack){.top = NULL, .gen=new_gen} iff *p ==
@@ -59,8 +61,7 @@
 #include <nalloc.h>
 #include <thread.h>
 
-/* Prevents certain system functions from using nalloc. Useful for
-   debugging. */
+/* Hides nalloc from certain libc functions. Useful for debugging. */
 #pragma GCC visibility push(hidden)
 
 #define LINREF_ACCOUNT_DBG 0
@@ -211,7 +212,7 @@ err (recover_hot_blocks)(slab *s){
    - L must have found s in a heritage after T1 (*), so some linfree()
      between T1 and T2 must have added s to a heritage and thus cleared
      s->lost. But T2 was the first time this happened.
-     - (*) needs a bit more proof.
+     - (*) needs a bit more proof. 
 
    In the second case:
 
@@ -437,29 +438,6 @@ int magics_valid(block *b, size bytes){
     for(size i = 0; i < (bytes - sizeof(*b))/sizeof(*magics); i++)
         assert(magics[i] == NALLOC_MAGIC_INT);
     return 1;
-}
-
-void *memalign(size align, size sz){
-    assert(align <= sz);
-    assert(is_pow2(align));
-    return malloc(sz);
-}
-
-int posix_memalign(void **mptr, size align, size sz){
-    *mptr = memalign(align, sz);
-    return *mptr ? 0 : -1;
-}
-
-void *pvalloc(size sz){
-    TODO();
-}
-
-void *aligned_alloc(size align, size sz){
-    return memalign(align, sz);
-}
-
-void *valloc(size sz){
-    TODO();
 }
 
 void profile_upd_alloc(size s){
