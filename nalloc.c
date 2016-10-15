@@ -17,7 +17,8 @@
      reinterpreted representation of e.
    
    cof(p, container_t, field):
-     Expands to container_t *ret | if p, &ret->field == p, else ret == NULL.
+     container_of(). Expands to container_t *ret | if p, &ret->field == p,
+     else ret == NULL.
 
    cof_aligned_pow2(p, t):
      Expands to p aligned down to a multiple of sizeof(t). sizeof(t) must
@@ -37,9 +38,9 @@
    cas2_won(dptr n, volatile dptr *p, dptr *old):
      A wrapper around __atomic_compare_exchange(p, old, n, ...).
      Arguments are punned to dptr[*] via macro wrapper.
-     (Exists mainly because __atomic_compare_exchange() is still
-     miscompiled on non-integral types. gcc will ICE and clang will
-     complain about C structs being non-trivially-copyable.)
+     (Exists mainly because __atomic_compare_exchange() with non-integral
+     types is still badly supported. gcc will ICE and clang will complain
+     about volatile C structs being non-trivially-copyable.)
    
    bool lfstack_clear_cas_won(uptr new_gen, lfstack *p, lfstack *old):
      Atomically set *p = (lfstack){.top = NULL, .gen=new_gen} iff *p ==
