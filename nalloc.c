@@ -1,3 +1,5 @@
+/* See nalloc.h first. */
+
 /* To save you from jumping across files:
 
    ----TYPES:
@@ -24,7 +26,7 @@
    rup(orig, changes...):
      The fields of ret and orig will be equal, except that ret == val for
      each arg of the form ".field = val" in changes. orig will be
-     unmodified, except as a side effect of evaluating changes.
+     unmodified, except as a side effect of evaluating each val.
 
    mustp/must(e):
      Like assert(e), except e is evaluated even with debugging off.
@@ -230,11 +232,11 @@ err (recover_hot_blocks)(slab *s){
    ----
 
    Note that if linfree() clears the lost flag and decides to free s, it
-   simply restarts the main loop and pushes b to s->hot_blocks as if it
-   had entered linfree() anew. This is because it's possible for it to
-   clear the lost flag and then be delayed so long that its subsequent
-   push to s->hot_blocks fills s->hot_blocks. It must check for this case
-   just like any thread entering linfree().
+   simply restarts the main loop, pushing b to s->hot_blocks as if it had
+   entered linfree() anew. This is because it's possible for it to clear
+   the lost flag and then be delayed so long that its subsequent push to
+   s->hot_blocks fills s->hot_blocks. It must check for this case just
+   like any thread entering linfree().
 */
 void (linfree)(lineage *l){
     block *b = l;

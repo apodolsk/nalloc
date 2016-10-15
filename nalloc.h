@@ -2,8 +2,7 @@
 
 /* Documentation conventions:
    - Time is tricky to talk about in a concurrent context, and I'm still
-     learning how to do it. I believe the following should suffice:
-     
+     learning how to do it. I believe the following suffices:
    - Each function has a single completion point and there's a global
      order of completion points with which all threads agree.
    - The return value of a function is determined at its completion point.
@@ -11,7 +10,6 @@
      "For any call C returning 'ret' and taking the named arguments,
       at all times after C completes,
       in all threads:"
-   - Past perfect tense specifies some time before the completion point.
 */
 
 #include <list.h>
@@ -112,12 +110,17 @@ void linfree(lineage *l);
    - OR !t->has_special_ref(l, true)
 
    If ret, linfree(o) must have completed for similarly defined o.
+
+   (In general, I'm a little fuzzy on how to talk about dangerously
+   undefined effects vs a harmless absence of guarantees. For instance, if
+   ret but every linref_up() call has been matched by a linref_down(), you
+   have no guarantee but nothing bad happens.)
 */
 checked err linref_up(const volatile void *l, type *t);
 
 /* Undefined unless, at the time of completion, there were more
    linref_up(l, t) calls which returned 0 than there were completed
-   linref_down(l, t) calls.
+   linref_down(l, t) calls. In this case, l may be freed by the system.
 */
 void linref_down(const volatile void *l, type *t);
 

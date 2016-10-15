@@ -19,15 +19,14 @@ that ~H~ has type ~T~ and isn't reallocated with a different type.
 The point is that, unlike schemes which block reuse of referenced memory,
 TSM allows ~H~ to be freed and reused by an allocation of type ~T~.
 
-The goal of TSM is safe memory access for complicated data structures. For
-example, consider a doubly-linked list used in a lockfree kernel:
+For example, consider a doubly-linked list used in a lockfree kernel:
 - Suppose ~lflist_del(A)~ has read ~P := A->prev~ and decided to write
   ~P->next~ with a CAS. If ~P~ is freed and reallocated as a string, the CAS
   can spuriously succeed if ~*P~ is an unlucky string which resembles the
   expected list node. ~linref_up(P, "list node")~ prevents this.
 
-~linref_up()~'s guarantee is weak, but the usual stronger guarantee
-turns out to be irrelevant in a robust program.
+~linref_up()~'s guarantee is weak, but the usual stronger guarantee turns
+out to be irrelevant in a robust program.
 - ~lflist_enq()~ can't make allocations because its callers can't
   really afford to handle allocation failures. So the list operates on
   "anchors" preallocated inside enqueuable objects. Successive enqueues of
@@ -43,17 +42,18 @@ turns out to be irrelevant in a robust program.
   the lflist simpler or more efficient if you knew that ~A~ also wasn't
   freed for this interval.
 
-As I describe later, TSM has a simple and cheap refcounting
+As I describe, TSM has a simple and cheap refcounting
 implementation. However, it should be compatible with other schemes for
 keeping track of references.
 
 * Nalloc
 
 Nalloc is a TSM-enabled slab allocator. It allocates "lineages" from
-"heritages" in O(1).
+"heritages" in O(1) uncontended.
 
-TSM is a minor addition to a slab allocator. Nalloc is just a basic slab
-allocator plus a refcount and type object pointer per slab.
+TSM is a minor addition to a slab allocator. Nalloc is just a basic
+(lockfree) slab allocator plus a refcount and type object pointer per
+slab.
 
 
 ** Interface
@@ -62,34 +62,32 @@ allocator plus a refcount and type object pointer per slab.
 :END:
 
 A lineage is a block of memory. Lineage ~L~ has a type in the sense that a
-pointer to a type object *Y* can be computed from ~L~'s address.
-- *Y* stores the size of lineages of its type; and a lineage initialization
+pointer to a type object ~Y~ can be computed from ~L~'s address.
+- ~Y~ stores the size of lineages of its type; and a lineage initialization
   function ~lin_init()~, to be run during allocation.
-- If ~linref_up(L, Y)~ succeeds, the following holds until ~linref_down(L, Y)~:
+- Roughly speaking, if ~linref_up(L, Y)~ succeeds, the following holds until
+  ~linref_down(L, Y)~:
   - L was last allocated with ~linalloc("Y")~, and thus ~Y->lin_init(L)~ completed.
-  - ~linref_up(L, Y')~ will succeed iff ~Y' == Y~ (in any thread).
+  - ~linref_up(L, Y')~ will succeed iff ~Y' == Y~ - in any thread.
   - If ~L~ is freed and reallocated:
     - It must be reallocated with type ~Y~.
     - nalloc won't write to any part of ~L~ other than its lowest
-      word, and thus ~Y->lin_init(L)~ won't be called during this
-      reallocation.
-    - NB: type-stability lets you avoid re-initialization after
-      reallocation. I hear this is desirable.
+      word. This means that ~Y->lin_init(L)~ won't run again.
 - In other words, all threads will agree that ~L~ has type ~Y~, and has been
-  initialized according to *Y*. If threads cooperate to make sure ~L~
+  initialized according to ~Y~. If threads cooperate to make sure ~L~
   satisfies some invariant of ~Y~, nalloc won't ruin it by clobbering ~L~.
+- See nalloc.h for a more precise description.
 
 - It's called a lineage because it represents multiple generations of
   a C memory object.
 
-A slab is an array of lineages, with some metadata. All lineages in a
-given slab have the same type and thus size. All slabs have the same size
-and are naturally aligned, so that the slab of a lineage can be computed
-directly from its address.
-- Each slab stores a refcount and a pointer to struct type, and ~L~'s
-  type is the type of its containing slab. ~linref_up(L,_)~ is a ~CAS2~ on
-  ~slab_of(L)~'s type fields. That's basically all there is to implementing
-  TSM: a refcount on slab rather than on individual blocks.
+A slab is an array of lineages and some metadata in a footer. All lineages
+in a given slab have the same type and thus size. All slabs have the same
+size and are naturally aligned, so that the slab of a lineage can be
+computed directly from its address.
+- Each slab stores a refcount and a pointer to struct type, and ~L~'s type
+  is the type of its containing slab. ~linref_up(L,_)~ is just a ~CAS2~ on
+  ~slab_of(L)~'s type fields.
 
 A heritage is a pool of slabs having the same type.
 - NB: they can be thread/CPU-local but wk doesn't exploit this.
@@ -98,30 +96,34 @@ nalloc defines some internal heritages with "types" meant to represent
 plain char buffers of different size classes. ~malloc()~ is just a wrapper
 around ~linalloc()~ with one these heritages.
 
-*** Implementation
+** Implementation
 :PROPERTIES:
 :UNNUMBERED: t
 :END:
 
-Lockfree slab allocation is simple. nalloc elaborates on the basic idea of
-using lfstacks to represent free lineages in a slab and free slabs in a
-heritage.
+Lockfree slab allocation is relatively simple. nalloc elaborates on the
+basic idea of using lfstacks to represent free lineages in a slab and free
+slabs in a heritage.
 
-~linalloc(H)~ pops a slab ~S~ from heritage ~H~, fetches a lineage from ~S~,
-and returns ~S~ to ~H~ iff ~S~ has lineages remaining. If not, ~S~ is
-said to be "lost".
-- NB: empty slabs aren't returned so that search is ~O(1)~ (uncontended).
+~linalloc(H)~ pops a slab ~S~ from heritage ~H~, fetches a lineage from ~S~, and
+returns ~S~ to ~H~ iff ~S~ has lineages remaining. If not, ~S~ is said to be
+"lost".
+- ~linalloc()~ has exclusive access to ~S~ after the pop.
+- NB: empty slabs aren't returned so that search is ~O(1)~. The main
+  challenge of nalloc is to preserve this property.
 
-~S~ splits its free lineages into 3 sets. This is an old optimization that
-made more sense in the past, but still has some benefit.
-- A "main" non-lockfree stack ~S->local_blocks~.
-- An lfstack ~S->hot_blocks~, on a separate cache line.
-  - NB: it accumulates freed lineages and is collected in batches. The
-    point is to avoid locked instructions and shared cache line writes.
+~S~ splits its free lineages into 3 sets. This is a relic of old designs,
+but still has benefit:
+- A "main" non-lockfree stack, ~S->local_blocks~.
+- An lfstack ~S->hot_blocks~, on a separate cache line. It accumulates freed
+  lineages and is collected in batches.
+  - NB: the benefit is fewer locked instructions and shared cache line
+    flushes in ~linalloc()~.
 - The maximal contiguous set of free lineages beginning at the start
   of the slab is represented only as a count ~S->contig_blocks~. 
-  - NB: it makes slab initializion cheaper. It encourages cache- and
-    prefetcher-friendly access patterns, not just inside nalloc.
+  - NB: it's slightly cheaper to allocate from, and encourages cache- and
+    prefetcher-friendly access patterns outside of nalloc. It's much
+    cheaper to initialize, but that's now moot.
 
 Slabs are initialized with all lineages in ~contig_blocks~.
 
@@ -130,38 +132,48 @@ Slabs are initialized with all lineages in ~contig_blocks~.
 - If it empties local_blocks, it uses a variant of ~lstack_clear()~ to
   transfer all lineages from ~hot_blocks~ onto ~local_blocks~ in ~O(1)~.
 
-~linfree(L)~ pushes ~L~ to ~slab_of(L)->hot_blocks~.
+~linfree(L)~ pushes ~L~ to ~slab_of(L)->hot_blocks~, freeing the slab when
+appropriate.
 
 The main subtlety is that ~linfree(L)~ needs to know whether ~S := slab_of(L)~
 has been lost, in which case it must return ~S~ to its former heritage ~H~ or
 arrange for it to be freed.
 - Multiple ~linfree(L)~ calls can find ~S~ lost, but only one should return
-  it. More subtly, it's not simple for ~linfree()~ to agree with an
-  in-flight ~linalloc()~ on whether ~S~ is actually lost.
+  it because its lockfree stack deliberately doesn't support concurrent
+  pushes of the same "node". More subtly, it's not simple for ~linfree()~ to
+  agree with an in-flight ~linalloc()~ on whether ~S~ is actually lost.
 - The key observation is that ~S->hot_blocks~ is always cleared
-  entirely with an ~lfstack_clear()~, so it doesn't need a version counter.
+  entirely with an ~lfstack_clear()~. Unlike a stack subjected to the
+  well-known lockfree ~pop()~ algorithm, ~S->hot_blocks~ doesn't need to store
+  a version count.
 - So ~S->hot_blocks.gen~ instead stores an authoritative "lost" flag and the
-  stack's size. The flag is set when ~linalloc()~ finds ~S->hot_blocks~ empty
+  stack's size. The flag is set when a ~linalloc()~ finds ~S->hot_blocks~ empty
   after also exhausting the other sets. It's unset by the next ~linfree()~
-  to ~S~.
-- If this ~linfree()~ decides to free ~S~, it suffices to not return it to
+  to ~S~. Call this ~linfree()~ ~A~.
+- If this ~linfree()~ decides to free ~S~, it simply doesn't return it to
   ~H~. No future allocations from ~S~ will happen, and the final ~linfree()~ to
   ~S~ will know to free it.
+- The subletly is that there shouldn't be a 'final' ~linfree()~ before
+  ~A~ has made its decision, lest the final ~linfree()~ free ~S~ while ~A~ is
+  attempting to return it to ~H~. So ~A~ delays freeing its block until it's
+  committed to freeing ~S~.
 
-The biggest problem with TSM is reporting failure in ~linref_up(P)~ when
-~P~ isn't on the heap. 
-- wk can easily validate ~P~ because its heap is contiguous and
+The biggest problem with nalloc is probably reporting failure in
+~linref_up(P)~ when ~P~ isn't on the nalloc heap. If it fails to detect this
+case, then it may spuriously write to *P*'s non-existant slab metadata.
+- Luckily, wk can easily validate ~P~ because its heap is contiguous and
   non-shrinking.
 - The userspace heap isn't, since it uses non-fixed mappings and should
   return memory to the system. Further, the user may have made mappings
   outside of nalloc's control.
-- Unfortunately, the current solution is for userspace nalloc to just
-  not return virtual memory to the kernel. It can reuse pages internally
-  and remap free slabs as "guard" pages to return physical memory - though
-  the current implementation doesn't.
+- Unfortunately, the current solution for userspace nalloc is to just
+  not return virtual memory to the kernel. It can remap free slabs as
+  "guard" pages to return physical memory, but the current implementation
+  doesn't.
 - This way, if ~P~ was previously on the heap, then ~linref_up(P)~ can expect
-  a segfault because ~P~ couldn't have been remapped outside of nalloc.
+  a segfault because ~P~ couldn't have been remapped outside of nalloc -
+  barring unsafe fixed-mapping tricks outside of nalloc.
 - If ~P~ was never on the heap, then ~linref_up(P, Y)~ can still spuriously
-  succeed, but only if ~P~ is on a non-nalloc-mapped page that resembles a
-  slab of type ~Y~. I don't expect a program to generate such a ~P~ unless it
-  takes pointers from untrusted sources. In that case, it's not secure.
+  succeed if ~P~ is on a non-nalloc-mapped page that resembles a slab of
+  type ~Y~. I don't expect a program to generate such a ~P~ unless it takes
+  pointers from untrusted sources. In that case, it's not secure.
